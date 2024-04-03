@@ -78,7 +78,11 @@ class LogStash::Outputs::SQS < LogStash::Outputs::Base
 
   # The name of the target SQS queue. Note that this is just the name of the
   # queue, not the URL or ARN.
-  config :queue, :validate => :string, :required => true
+  config :queue, :validate => :string
+
+  # The queue url of the target SQS queue. If both queue and queue_url are configured, queue will
+  # take precedence. In this case queue_url will be ignored.
+  config :queue_url, :validate => :string
 
   # Account ID of the AWS account which owns the queue. Note IAM permissions
   # need to be configured on both accounts to function.
@@ -92,18 +96,24 @@ class LogStash::Outputs::SQS < LogStash::Outputs::Base
       raise LogStash::ConfigurationError, 'The maximum batch size is 10 events'
     elsif @batch_events < 1
       raise LogStash::ConfigurationError, 'The batch size must be greater than 0'
-   end
+    end
 
     begin
-      params = { queue_name: @queue }
       params[:queue_owner_aws_account_id] = @queue_owner_aws_account_id if @queue_owner_aws_account_id
 
-      @logger.debug('Connecting to SQS queue', params.merge(region: region))
-      @queue_url = @sqs.get_queue_url(params)[:queue_url]
-      @logger.info('Connected to SQS queue successfully', params.merge(region: region))
+      if @queue
+        params = { queue_name: @queue }
+        @logger.debug('connecting to sqs queue', params.merge(region: region))
+        @queue_url = @sqs.get_queue_url(params)[:queue_url]
+        @logger.info('connected to sqs queue successfully', params.merge(region: region))
+      end
     rescue Aws::SQS::Errors::ServiceError => e
       @logger.error('Failed to connect to SQS', :error => e)
       raise LogStash::ConfigurationError, 'Verify the SQS queue name and your credentials'
+    end
+
+    if !@queue_url
+      raise LogStash::ConfigurationError, 'Either queue or queue_url should be configured'
     end
   end
 
@@ -155,7 +165,8 @@ class LogStash::Outputs::SQS < LogStash::Outputs::Base
         next
       end
 
-      @sqs.send_message(:queue_url => @queue_url, :message_body => encoded)
+      # replace variable in queue_url if it is part of configuration
+      @sqs.send_message(:queue_url => event.sprintf(@queue_url), :message_body => encoded)
     end
   end
 
